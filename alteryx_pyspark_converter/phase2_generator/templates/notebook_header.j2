@@ -1,0 +1,17 @@
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # {{ container_name }} - Auto-Generated from Alteryx
+# MAGIC
+# MAGIC **Source Workflow:** {{ workflow_name }}.yxmd
+# MAGIC **Container:** {{ container_name }}
+# MAGIC **Generated:** {{ generated_at }}
+# MAGIC **Generator Version:** {{ version }}
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## Data Sources
+# MAGIC | Input | Databricks Table |
+# MAGIC |-------|------------------|
+{% for key, table in input_tables.items() %}
+# MAGIC | {{ key }} | {{ table }} |
+{% endfor %}

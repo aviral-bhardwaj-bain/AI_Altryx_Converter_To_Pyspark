@@ -1,0 +1,18 @@
+# =============================================================================
+# AUTO-GENERATED CONFIGURATION - DO NOT EDIT ABOVE THIS LINE
+# =============================================================================
+
+# Source Tables
+{% for key, table in source_tables.items() %}
+{{ key.upper() }}_TABLE = "{{ table }}"
+{% endfor %}
+
+{% if output_table %}
+# Output Table
+OUTPUT_TABLE = "{{ output_table }}"
+{% endif %}
+
+{% if expected_row_count %}
+# Expected row count for validation
+EXPECTED_ROW_COUNT = {{ expected_row_count }}
+{% endif %}

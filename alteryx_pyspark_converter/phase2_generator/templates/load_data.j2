@@ -1,0 +1,13 @@
+# =============================================================================
+# LOAD INPUT DATA
+# =============================================================================
+
+{% for input in inputs %}
+# Load input: {{ input.key }}
+df_input_{{ input.key }} = spark.table("{{ input.table_name }}")
+{% if input.pre_filter %}
+# Pre-filter
+df_input_{{ input.key }} = df_input_{{ input.key }}.filter("""{{ input.pre_filter }}""")
+{% endif %}
+
+{% endfor %}
