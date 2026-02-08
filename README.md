@@ -1,35 +1,239 @@
-# Alteryx to PySpark AI Converter (Claude-Powered)
+# Alteryx to PySpark Converter for Databricks
 
-A next-generation Alteryx workflow converter that uses **Claude AI** to generate production-ready PySpark code — one file per container/module. Unlike rule-based converters that do mechanical 1:1 tool translation, this tool sends the **full context** of each container (tools, connections, expressions, inline data, data flow) to Claude, which generates idiomatic, well-commented PySpark code that a human would actually write.
+Converts Alteryx `.yxmd` workflows into production-ready **PySpark code** for **Databricks**. Supports two conversion modes:
 
-## Why AI-Powered?
+| Mode | Approach | Best For |
+|------|----------|----------|
+| **AI-Powered** | Sends workflow context to Claude AI | Complex workflows, idiomatic code |
+| **Rule-Based** | Deterministic Phase 1 (parse) + Phase 2 (generate) | Predictable output, no API needed |
 
-| Aspect | Rule-Based Converter | AI-Powered Converter |
-|--------|---------------------|---------------------|
-| Expression handling | Regex-based, brittle | Understands semantic intent |
-| Code quality | Mechanical, verbose | Idiomatic, clean PySpark |
-| Complex logic | Breaks on nested IF/ELSE, CrossTab | Handles any complexity |
-| Business context | None — just tool → code mapping | Understands what the workflow does |
-| Output | One giant file | One file per container/module |
-| Join handling | Often misses multi-output routing | Tracks J/L/R outputs correctly |
+---
 
-## Quick Start
+## Running in Databricks (Recommended)
 
-### 1. Install
+### Prerequisites
 
-```bash
-pip install anthropic   # optional, falls back to urllib
+- Databricks workspace with a running cluster (DBR 13.0+)
+- Python 3.10+ on the cluster
+- Anthropic API key (for AI-powered mode only)
+- An Alteryx `.yxmd` workflow file
+
+### Step 1: Upload Project to Databricks Workspace
+
+Upload the entire project to your Databricks workspace using one of these methods:
+
+**Option A: Git integration (recommended)**
+```
+Workspace > Repos > Add Repo > paste the repository URL
 ```
 
-### 2. Set your API key
+**Option B: Manual upload**
+1. Go to **Workspace > Users > your_username**
+2. Create a folder: `alteryx_converter`
+3. Import the project files:
+   - Import the `notebooks/` directory contents directly into this folder
+   - Import the full project repo for rule-based mode
+
+Your workspace structure should look like:
+```
+/Workspace/Users/<you>/alteryx_converter/
+  |- 00_setup.py              # Dependency installer
+  |- 01_run_ai_converter.py   # AI-powered converter
+  |- 02_run_rule_based_converter.py  # Rule-based converter
+  |- config.py                # Shared config (for AI mode)
+  |- models.py                # Data models
+  |- parser.py                # XML parser
+  |- context_builder.py       # Prompt builder
+  |- ai_generator.py          # Claude API client
+  |- utils.py                 # Display helpers
+  |- convert_workflow.py      # Legacy AI converter
+```
+
+For the rule-based converter, also upload the full project (including `alteryx_pyspark_converter/`):
+```
+/Workspace/Users/<you>/alteryx_converter/AI_Altryx_Converter_To_Pyspark/
+  |- alteryx_pyspark_converter/    # Rule-based converter package
+  |- src/                          # AI converter source
+  |- examples/                     # Config examples
+  |- ...
+```
+
+### Step 2: Upload Your Workflow File
+
+Upload your `.yxmd` file to a **Databricks Volume** or **DBFS**:
+
+**Using Volumes (recommended):**
+```
+/Volumes/<catalog>/<schema>/<volume>/my_workflow.yxmd
+```
+
+**Using DBFS:**
+```
+dbfs:/FileStore/workflows/my_workflow.yxmd
+```
+
+**Using the Databricks UI:**
+1. Go to **Catalog > your_catalog > your_schema > Volumes**
+2. Click **Upload** and select your `.yxmd` file
+
+### Step 3: Install Dependencies
+
+Open and run the `00_setup` notebook:
+
+1. Navigate to `/Workspace/Users/<you>/alteryx_converter/00_setup`
+2. Click **Run All**
+3. This installs: `anthropic`, `pyyaml`, `jinja2`
+4. Restarts the Python interpreter automatically
+
+> You only need to run this once per cluster restart.
+
+### Step 4: Set Up Secrets (AI Mode Only)
+
+Store your Anthropic API key securely:
 
 ```bash
+# From your local terminal (one-time setup)
+pip install databricks-cli
+databricks configure --token
+
+# Create secret scope and store API key
+databricks secrets create-scope alteryx-converter
+databricks secrets put-secret alteryx-converter anthropic-api-key
+# Paste your API key when prompted
+```
+
+**Alternative via Databricks UI:**
+1. Navigate to `https://<workspace-url>/#secrets/createScope`
+2. Scope name: `alteryx-converter`
+3. Use CLI to add the key: `databricks secrets put-secret alteryx-converter anthropic-api-key`
+
+### Step 5: Run the Converter
+
+#### Option A: AI-Powered Converter (`01_run_ai_converter`)
+
+1. Open `/Workspace/Users/<you>/alteryx_converter/01_run_ai_converter`
+2. Configure the widgets at the top:
+
+| Widget | Example Value | Description |
+|--------|---------------|-------------|
+| **Workflow File Path** | `/Volumes/my_catalog/my_schema/vol/workflow.yxmd` | Path to your `.yxmd` file |
+| **Output Directory** | `/Workspace/Users/<you>/output` | Where generated `.py` files are saved |
+| **Container Name** | *(blank for all)* | Convert a specific container, or leave blank for all |
+| **Run Mode** | `convert` | `convert`, `list_containers`, or `dry_run` |
+| **Claude Model** | `claude-sonnet-4-20250514` | AI model to use |
+| **Max Retries** | `2` | Retries on API failure |
+| **Secret Scope** | `alteryx-converter` | Databricks secret scope name |
+| **Secret Key** | `anthropic-api-key` | Secret key name |
+| **Source Tables JSON** | *(optional)* | Path to table mapping JSON |
+
+3. Click **Run All**
+4. Generated PySpark files appear in the output directory
+
+#### Option B: Rule-Based Converter (`02_run_rule_based_converter`)
+
+1. Create a config YAML file (see [Config File Format](#config-file-format) below)
+2. Upload the config file to a Volume or DBFS
+3. Open `/Workspace/Users/<you>/alteryx_converter/02_run_rule_based_converter`
+4. Configure the widgets:
+
+| Widget | Example Value | Description |
+|--------|---------------|-------------|
+| **Workflow File Path** | `/Volumes/my_catalog/my_schema/vol/workflow.yxmd` | Path to your `.yxmd` file |
+| **Config YAML Path** | `/Volumes/my_catalog/my_schema/vol/config.yaml` | Path to config YAML |
+| **Output Directory** | `/Workspace/Users/<you>/output` | Where generated files are saved |
+| **Project Root Path** | `/Workspace/Users/<you>/alteryx_converter/AI_Altryx_Converter_To_Pyspark` | Where the full project repo is uploaded |
+| **Run Mode** | `full_convert` | `full_convert`, `parse_only`, `generate_only`, `list_containers`, `show_columns` |
+| **Container Name** | *(for show_columns mode)* | Container to inspect |
+| **Skip Validation** | `false` | Skip syntax checking |
+
+5. Click **Run All**
+
+### Step 6: Use the Generated Code
+
+The converter outputs `.py` files in Databricks notebook format. To use them:
+
+1. Navigate to the output directory in Workspace
+2. Open the generated notebook (e.g., `mod_provider.py`)
+3. Review the PySpark code
+4. Update `spark.table()` references with your actual Databricks table paths
+5. Run the notebook
+
+---
+
+## Config File Format
+
+For the rule-based converter, create a YAML configuration file:
+
+```yaml
+# Container to convert (name or tool ID)
+container_name: "mod_provider"
+
+# Input tables and their schemas
+input_tables:
+  fact_nps:
+    databricks_table: "gold_catalog.insurance.st_fact_nps"
+    maps_to_tool_id: 3111
+
+  fact_response:
+    databricks_table: "gold_catalog.insurance.st_fact_response"
+    maps_to_tool_id: 2367
+    # Optional: Pre-filter to apply when loading
+    pre_filter: >
+      (typ_question = 'multiple')
+      AND (num_answer != '0')
+
+# Column mappings: Alteryx column name -> Databricks column name
+column_mappings:
+  nps_type: typ_nps
+  verbatim: txt_verbatim
+  nps_score: num_nps_score
+  question_var: id_survey_question
+
+# Output configuration
+output:
+  table_name: "gold_catalog.insurance.mod_provider"
+  columns:
+    - provider_name
+    - gid_respondent
+    - gid_provider
+
+# Notebook settings
+notebook:
+  add_validation_cell: true
+  add_schema_print: true
+```
+
+See `examples/sample_config.yaml` for a complete template.
+
+## Source Table Mapping (AI Mode)
+
+For the AI-powered converter, create a JSON file mapping Alteryx inputs to Databricks tables:
+
+```json
+{
+    "nps_fact": "gold_catalog.insurance.nps_fact",
+    "dim_provider": "gold_catalog.insurance.dim_provider",
+    "dim_time": "gold_catalog.insurance.dim_time"
+}
+```
+
+Upload to a Volume and reference it in the **Source Tables JSON Path** widget.
+
+---
+
+## Running from the Command Line (Alternative)
+
+If you prefer running locally instead of in Databricks:
+
+### AI-Powered Mode
+
+```bash
+# Install dependencies
+pip install anthropic
+
+# Set API key
 export ANTHROPIC_API_KEY=sk-ant-api03-...
-```
 
-### 3. Run
-
-```bash
 # Convert all containers
 python convert.py my_workflow.yxmd -o ./output
 
@@ -43,60 +247,20 @@ python convert.py my_workflow.yxmd --list-containers
 python convert.py my_workflow.yxmd --dry-run
 ```
 
-## Architecture
+### Rule-Based Mode
 
-```
-┌─────────────────┐     ┌──────────────┐     ┌───────────────┐     ┌──────────┐
-│  .yxmd XML File │────▶│  XML Parser  │────▶│Context Builder │────▶│ Claude AI│
-│                 │     │              │     │               │     │          │
-│ - Nodes         │     │ - Containers │     │ - Tools+Config│     │ Generates│
-│ - Connections   │     │ - Tools      │     │ - Data Flow   │     │ PySpark  │
-│ - Configuration │     │ - Connections│     │ - Inline Data │     │ Code     │
-└─────────────────┘     └──────────────┘     │ - External I/O│     └────┬─────┘
-                                             └───────────────┘          │
-                                                                        ▼
-                                                              ┌──────────────────┐
-                                                              │ Output Files     │
-                                                              │ mod_provider.py  │
-                                                              │ mod_product.py   │
-                                                              │ mod_episode.py   │
-                                                              └──────────────────┘
+```bash
+# Install the package
+pip install -e alteryx_pyspark_converter/
+
+# Phase 1: Parse workflow to JSON
+alteryx-parse parse -i workflow.yxmd -o ./intermediate/
+
+# Phase 2: Generate notebook from JSON + config
+alteryx-generate generate -i ./intermediate/intermediate.json -c config.yaml -o ./output/notebook.py
 ```
 
-### How It Works
-
-1. **Parse**: The XML parser extracts every container, tool, connection, TextInput data, and configuration from the `.yxmd` file
-2. **Context Build**: For each container, the context builder assembles:
-   - All tools inside with full XML configuration
-   - Internal connections (data flow between tools)
-   - External inputs (which upstream tools/containers feed data in)
-   - External outputs (where data flows to next)
-   - Sub-containers (nested groups)
-   - Inline data from TextInput tools
-3. **AI Generate**: This rich context is sent to Claude with a detailed system prompt that teaches it Alteryx → PySpark translation patterns
-4. **Validate**: Generated code is syntax-checked and validated
-5. **Output**: One `.py` file per container, ready for Databricks
-
-## Project Structure
-
-```
-alteryx_ai_converter/
-├── convert.py              # CLI entry point
-├── requirements.txt
-├── README.md
-├── src/
-│   ├── __init__.py
-│   ├── parser.py           # Alteryx XML parser
-│   ├── models.py           # Data models (Workflow, Container, Tool, Connection)
-│   ├── context_builder.py  # Builds rich prompts from parsed data
-│   ├── ai_generator.py     # Claude API integration
-│   └── utils.py            # CLI utilities
-├── examples/
-│   └── source_tables.json  # Example table mapping config
-└── output/                 # Generated PySpark files go here
-```
-
-## CLI Options
+### CLI Options (AI Mode)
 
 ```
 usage: convert.py [-h] [--output-dir DIR] [--container NAME]
@@ -117,30 +281,53 @@ options:
   --source-tables-config  JSON mapping Alteryx inputs to Databricks tables
 ```
 
-## Source Table Mapping
+---
 
-Create a JSON file to map Alteryx input sources to your Databricks tables:
+## Calling Notebooks Programmatically
 
-```json
-{
-    "nps_fact": "gold_catalog.insurance.nps_fact",
-    "dim_provider": "gold_catalog.insurance.dim_provider",
-    "dim_time": "gold_catalog.insurance.dim_time"
-}
-```
+You can run the converter from another Databricks notebook using `dbutils.notebook.run()`:
 
-Pass it with `--source-tables-config`:
-
-```bash
-python convert.py workflow.yxmd --source-tables-config source_tables.json
-```
-
-## Use in Databricks Notebook
+### AI-Powered Converter
 
 ```python
-# Upload the converter to your workspace, then:
+result = dbutils.notebook.run(
+    "/Workspace/Users/<you>/alteryx_converter/01_run_ai_converter",
+    timeout_seconds=3600,
+    arguments={
+        "workflow_path": "/Volumes/catalog/schema/vol/workflow.yxmd",
+        "output_dir": "/Workspace/Users/<you>/output",
+        "run_mode": "convert",
+        "model": "claude-sonnet-4-20250514",
+        "container_name": "",          # blank = all containers
+        "secret_scope": "alteryx-converter",
+        "secret_key": "anthropic-api-key",
+    }
+)
+print(result)  # "COMPLETE: 3/3 containers converted successfully"
+```
+
+### Rule-Based Converter
+
+```python
+result = dbutils.notebook.run(
+    "/Workspace/Users/<you>/alteryx_converter/02_run_rule_based_converter",
+    timeout_seconds=1800,
+    arguments={
+        "workflow_path": "/Volumes/catalog/schema/vol/workflow.yxmd",
+        "config_path": "/Volumes/catalog/schema/vol/config.yaml",
+        "output_dir": "/Workspace/Users/<you>/output",
+        "project_root": "/Workspace/Users/<you>/alteryx_converter/AI_Altryx_Converter_To_Pyspark",
+        "run_mode": "full_convert",
+    }
+)
+print(result)  # "COMPLETE: Generated /Workspace/Users/.../mod_provider.py"
+```
+
+### Inline Usage (AI Mode)
+
+```python
 import sys
-sys.path.append("/Workspace/Users/you/alteryx_ai_converter")
+sys.path.append("/Workspace/Users/<you>/alteryx_converter/AI_Altryx_Converter_To_Pyspark")
 
 from src.parser import AlteryxWorkflowParser
 from src.ai_generator import ClaudeCodeGenerator
@@ -155,10 +342,11 @@ for c in workflow.containers:
 
 # Generate code for a specific container
 generator = ClaudeCodeGenerator(
-    api_key=dbutils.secrets.get("my-scope", "anthropic-key"),
+    api_key=dbutils.secrets.get("alteryx-converter", "anthropic-api-key"),
     model="claude-sonnet-4-20250514",
 )
 
+container = workflow.containers[0]
 context = workflow.get_container_context(container.tool_id)
 code = generator.generate_container_code(
     container=container,
@@ -168,28 +356,115 @@ code = generator.generate_container_code(
 print(code)
 ```
 
+---
+
+## Architecture
+
+```
+                          Alteryx .yxmd Workflow
+                                  |
+                 +----------------+----------------+
+                 |                                  |
+         AI-Powered Mode                   Rule-Based Mode
+         (Claude API)                      (Deterministic)
+                 |                                  |
+    +------------+------------+        +------------+------------+
+    |                         |        |                         |
+    v                         v        v                         v
+ XML Parser              Context    Phase 1                  Phase 2
+ (parser.py)             Builder    Parser                   Generator
+    |                    (builds    (XML -> JSON)            (JSON -> PySpark)
+    |                    prompts)       |                         |
+    v                        |         v                         v
+ Workflow Model              |    Intermediate              Tool Converters
+ (models.py)                 |    JSON                      Expression Converter
+    |                        v         |                    Notebook Assembler
+    |                    Claude AI     |                         |
+    |                        |         v                         v
+    v                        v    intermediate.json          Generated
+ Containers             Generated                           Databricks
+ Tools                  PySpark                             Notebook
+ Connections            Code                                (.py)
+```
+
+### Notebook Structure (Databricks)
+
+```
+notebooks/
+  |- 00_setup.py                    # Install dependencies (run first)
+  |- 01_run_ai_converter.py         # AI-powered converter (main)
+  |- 02_run_rule_based_converter.py # Rule-based Phase 1+2 converter
+  |- config.py                      # Widget configuration & secrets
+  |- models.py                      # Data model classes
+  |- parser.py                      # Alteryx XML parser
+  |- context_builder.py             # Prompt construction
+  |- ai_generator.py                # Claude API integration
+  |- utils.py                       # Display helpers
+  |- convert_workflow.py            # Legacy orchestrator
+```
+
+### Full Project Structure
+
+```
+AI_Altryx_Converter_To_Pyspark/
+  |- convert.py                        # CLI entry point (AI mode)
+  |- requirements.txt                  # Python dependencies
+  |- README.md                         # This file
+  |
+  |- src/                              # AI-Powered Converter
+  |   |- parser.py                     # Alteryx XML parser
+  |   |- models.py                     # Data models
+  |   |- context_builder.py            # Builds prompts for Claude
+  |   |- ai_generator.py               # Claude API integration
+  |   |- utils.py                      # CLI utilities
+  |
+  |- alteryx_pyspark_converter/        # Rule-Based Converter
+  |   |- phase1_parser/                # Parse .yxmd -> intermediate JSON
+  |   |   |- parser/                   # XML extraction modules
+  |   |   |- models/                   # Data model classes
+  |   |   |- output/                   # JSON writer
+  |   |   |- cli.py                    # Phase 1 CLI
+  |   |
+  |   |- phase2_generator/            # Generate PySpark from JSON
+  |   |   |- generator/               # Code generation engine
+  |   |   |- tool_converters/         # Per-tool converters (15+ types)
+  |   |   |- expression_converter/    # Alteryx formula -> PySpark
+  |   |   |- validators/              # Code validation
+  |   |   |- config/                  # Configuration handling
+  |   |   |- cli.py                   # Phase 2 CLI
+  |   |
+  |   |- common/                      # Shared utilities
+  |
+  |- notebooks/                        # Databricks Notebooks
+  |- examples/                         # Config templates
+  |- tests/                            # Test suite
+```
+
 ## Supported Alteryx Tools
 
-The AI converter handles **all** Alteryx tools by sending their full XML configuration to Claude. Key tools with special handling:
+The converter handles these Alteryx tool types:
 
-- **Filter** → `.filter()` with True/False output tracking
-- **Formula** → `.withColumn()` with full expression conversion
-- **Join** → `.join()` with Join/Left/Right output tracking
-- **Select** → Column selection, renaming, reordering
-- **Union** → `.unionByName()`
-- **Summarize** → `.groupBy().agg()`
-- **CrossTab** → `.groupBy().pivot().agg()`
-- **TextInput** → `spark.createDataFrame()` with inline data
-- **LockIn* (In-DB tools)** → Treated as their standard equivalents
-- **Sort, Unique, Sample, RegEx, etc.** → All supported
+| Alteryx Tool | PySpark Equivalent | Notes |
+|-------------|-------------------|-------|
+| Filter | `.filter()` | True/False output tracking |
+| Formula | `.withColumn()` | Full expression conversion |
+| Join | `.join()` | Join/Left/Right output tracking |
+| Select | `.select()` / `.drop()` / `.withColumnRenamed()` | Column selection, renaming, reordering |
+| Union | `.unionByName(allowMissingColumns=True)` | Multiple inputs |
+| Summarize | `.groupBy().agg()` | All aggregation functions |
+| CrossTab | `.groupBy().pivot().agg()` | Pivot tables |
+| TextInput | `spark.createDataFrame()` | Inline data |
+| Sort | `.orderBy()` | Multi-column sorting |
+| Unique | `.dropDuplicates()` | Unique/Dupes outputs |
+| Sample | `.sample()` / `.limit()` | Various sampling methods |
+| RegEx | `F.regexp_extract()` / `F.regexp_replace()` | Pattern matching |
+| TextToColumns | `F.split()` | Column splitting |
+| Transpose | Stack/unpivot | Row/column transposition |
+| RecordID | `F.monotonically_increasing_id()` | Row numbering |
+| MultiRowFormula | `Window` functions | Cross-row calculations |
+| LockIn* (In-DB) | Standard equivalents | 12 In-Database tool variants |
 
-## Requirements
-
-- Python 3.8+
-- `anthropic` SDK (optional, urllib fallback available)
-- Anthropic API key with Claude access
-
-## Model Selection
+## Model Selection (AI Mode)
 
 | Model | Best For | Cost |
 |-------|----------|------|
@@ -197,99 +472,48 @@ The AI converter handles **all** Alteryx tools by sending their full XML configu
 | `claude-opus-4-20250514` | Most complex workflows with intricate logic | $$$$ |
 | `claude-haiku-4-5-20251001` | Simple containers, budget-conscious | $ |
 
-## Databricks Notebooks
+## Troubleshooting
 
-The `notebooks/` directory contains the full converter adapted as **Databricks notebooks** with proper inter-notebook connections via `%run`.
+### Common Issues
 
-### Notebook Structure
+**"ModuleNotFoundError: No module named 'alteryx_pyspark_converter'"**
+- Make sure the `project_root` widget points to the directory containing the `alteryx_pyspark_converter` folder
+- Verify the project was fully uploaded to Workspace
 
-```
-notebooks/
-├── convert_workflow.py     # Main orchestrator (run this one)
-├── config.py               # Widgets, secrets, validation
-├── ai_generator.py         # Claude API integration
-├── context_builder.py      # Prompt construction
-├── parser.py               # Alteryx XML parser
-├── models.py               # Data model classes
-└── utils.py                # Display helpers
-```
+**"API key not found in secrets"**
+- Run: `databricks secrets list-secrets --scope alteryx-converter`
+- Verify the scope and key names match your widget configuration
+- Re-run `00_setup` for instructions
 
-### Notebook Dependency Chain
+**"Workflow file not found"**
+- Use absolute paths: `/Volumes/catalog/schema/volume/file.yxmd`
+- For DBFS: use `dbfs:/path/to/file.yxmd` prefix
+- Verify the file exists: `dbutils.fs.ls("/Volumes/catalog/schema/volume/")`
 
-```
-convert_workflow (entry point)
-  |-- %run ./config          --> widgets, secrets, validation
-  |-- %run ./ai_generator    --> Claude API integration
-  |     |-- %run ./context_builder  --> prompt building
-  |           |-- %run ./models     --> data classes
-  |-- %run ./parser          --> XML parsing
-  |     |-- %run ./models     --> (already loaded)
-  |-- %run ./utils           --> display helpers
-```
+**"Generated code has syntax errors"**
+- Try a more capable model (`claude-opus-4-20250514`)
+- Increase `max_retries` to 3-5
+- Check if the container has unsupported tool types
 
-### Key Differences from CLI Version
+**Cluster times out during conversion**
+- Large workflows with many containers may take time
+- Convert one container at a time using the `container_name` widget
+- Increase cluster auto-termination timeout
 
-| Aspect | CLI (`convert.py`) | Databricks (`notebooks/`) |
-|--------|-------------------|--------------------------|
-| Parameters | `argparse` CLI args | `dbutils.widgets` (interactive UI) |
-| API Key | `ANTHROPIC_API_KEY` env var | `dbutils.secrets.get()` |
-| File paths | Local filesystem | Volumes, DBFS, or Workspace paths |
-| Module imports | `from src.parser import ...` | `%run ./parser` |
-| Output display | `print()` to terminal | `print()` + `displayHTML()` tables |
-| Exit handling | `sys.exit()` | `dbutils.notebook.exit()` |
+### Getting Help
 
-### Databricks Setup
+- Check `examples/` directory for sample configs
+- Use `list_containers` mode to inspect your workflow before converting
+- Use `dry_run` mode to verify parsing without API calls
+- Use `show_columns` mode (rule-based) to inspect column usage
 
-1. **Upload notebooks** to your Databricks workspace:
-   ```
-   /Workspace/Users/<you>/alteryx_converter/
-   ```
+## Requirements
 
-2. **Store your API key** in Databricks Secrets:
-   ```bash
-   databricks secrets create-scope alteryx-converter
-   databricks secrets put-secret alteryx-converter anthropic-api-key
-   ```
-
-3. **Upload your `.yxmd` file** to a Databricks Volume:
-   ```
-   /Volumes/<catalog>/<schema>/<volume>/workflow.yxmd
-   ```
-
-4. **Open `convert_workflow`** notebook, configure the widgets, and click **Run All**.
-
-### Widget Parameters
-
-| Widget | Default | Description |
-|--------|---------|-------------|
-| `workflow_path` | *(required)* | Path to `.yxmd` file (Volume or DBFS) |
-| `output_dir` | `/Workspace/Users/shared/alteryx_converter/output` | Where to write generated files |
-| `container_name` | *(blank = all)* | Convert a specific container only |
-| `model` | `claude-sonnet-4-20250514` | Claude model to use |
-| `max_retries` | `2` | API call retries per container |
-| `secret_scope` | `alteryx-converter` | Databricks secret scope |
-| `secret_key` | `anthropic-api-key` | Secret key for the API key |
-| `run_mode` | `convert` | `convert`, `list_containers`, or `dry_run` |
-| `source_tables_json` | *(blank)* | Optional JSON mapping file path |
-
-### Running from Another Notebook
-
-You can also call the converter programmatically from another notebook:
-
-```python
-result = dbutils.notebook.run(
-    "/Workspace/Users/<you>/alteryx_converter/convert_workflow",
-    timeout_seconds=3600,
-    arguments={
-        "workflow_path": "/Volumes/catalog/schema/vol/workflow.yxmd",
-        "output_dir": "/Workspace/Users/<you>/output",
-        "run_mode": "convert",
-        "model": "claude-sonnet-4-20250514",
-        "container_name": "Provider Module",
-    }
-)
-print(result)  # "COMPLETE: 1/1 containers converted successfully"
-```
+- Python 3.10+
+- `anthropic>=0.39.0` (optional for AI mode, falls back to urllib)
+- `pyyaml>=6.0`
+- `jinja2>=3.0`
+- Databricks Runtime 13.0+ (for notebook execution)
 
 ## License
 
