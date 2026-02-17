@@ -255,6 +255,47 @@ class Workflow:
             "source_tools": source_tools,
         }
 
+    def get_unified_context(self) -> dict:
+        """
+        Build a single unified context containing ALL tools in the workflow
+        (both root-level and inside containers). This produces one combined
+        module for the entire workflow.
+        """
+        all_tool_ids = set(self.all_tools.keys())
+
+        # ALL connections are internal since we're treating the entire workflow as one unit
+        internal_connections = list(self.connections)
+
+        # ALL tools
+        tools = list(self.all_tools.values())
+
+        # ALL text input data
+        text_input_data = dict(self.text_inputs)
+
+        # Container info for annotation
+        containers_info = []
+        for c in self.containers:
+            containers_info.append(c)
+
+        # Create a virtual container representing the full workflow
+        virtual_container = Container(
+            tool_id=-1,
+            name="Full_Workflow",
+            child_tool_ids=list(all_tool_ids),
+            child_tools=tools,
+        )
+
+        return {
+            "container": virtual_container,
+            "tools": tools,
+            "internal_connections": internal_connections,
+            "external_inputs": [],
+            "external_outputs": [],
+            "sub_containers": containers_info,
+            "text_input_data": text_input_data,
+            "source_tools": {},
+        }
+
     def _find_tool_container_name(self, tool_id: int) -> str:
         """Find which container a tool belongs to."""
         tool = self.all_tools.get(tool_id)
