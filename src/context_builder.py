@@ -255,13 +255,17 @@ def build_container_prompt(
     - Inline data (TextInput tools)
     """
     parts = []
-    is_root = (container.tool_id == -1)
+    is_unified = (container.tool_id == -1)
 
     # ── Header ───────────────────────────────────────────────────────
-    if is_root:
-        parts.append(f"# Module: {container.name} (Root-Level Workflow)")
-        parts.append(f"# This module contains all {len(context.get('tools', []))} tools at the "
-                      "root level of the workflow (outside any container).")
+    if is_unified:
+        num_tools = len(context.get("tools", []))
+        sub_containers = context.get("sub_containers", [])
+        parts.append(f"# Workflow: {container.name}")
+        parts.append(f"# This workflow contains {num_tools} tools total.")
+        if sub_containers:
+            parts.append(f"# Containers: {', '.join(c.name for c in sub_containers)}")
+            parts.append("# All tools (both inside containers and at root level) must be converted together.")
     else:
         parts.append(f"# Container: {container.name}")
         parts.append(f"# Container ToolID: {container.tool_id}")
@@ -431,7 +435,7 @@ def build_container_prompt(
     tools = context.get("tools", [])
     tools_sorted = sorted(tools, key=lambda t: (t.position.get("x", 0), t.position.get("y", 0)))
 
-    module_label = "root-level workflow" if is_root else "this container"
+    module_label = "this workflow" if is_unified else "this container"
     parts.append(f"## TOOLS (detailed configuration of each tool in {module_label}):")
     parts.append("")
 

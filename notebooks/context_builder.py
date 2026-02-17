@@ -192,13 +192,17 @@ def build_container_prompt(
     """Build a detailed prompt describing a module's full logic for Claude AI.
     Handles both real containers and root-level virtual containers."""
     parts = []
-    is_root = (container.tool_id == -1)
+    is_unified = (container.tool_id == -1)
 
     # Header
-    if is_root:
-        parts.append(f"# Module: {container.name} (Root-Level Workflow)")
-        parts.append(f"# This module contains all {len(context.get('tools', []))} tools at the "
-                      "root level of the workflow (outside any container).")
+    if is_unified:
+        num_tools = len(context.get("tools", []))
+        sub_containers = context.get("sub_containers", [])
+        parts.append(f"# Workflow: {container.name}")
+        parts.append(f"# This workflow contains {num_tools} tools total.")
+        if sub_containers:
+            parts.append(f"# Containers: {', '.join(c.name for c in sub_containers)}")
+            parts.append("# All tools (both inside containers and at root level) must be converted together.")
     else:
         parts.append(f"# Container: {container.name}")
         parts.append(f"# Container ToolID: {container.tool_id}")
@@ -304,7 +308,7 @@ def build_container_prompt(
     # Data Flow
     internal_connections = context.get("internal_connections", [])
     if internal_connections:
-        module_label = "root-level workflow" if is_root else "this container"
+        module_label = "this workflow" if is_unified else "this container"
         parts.append(f"## DATA FLOW (how data moves between tools inside {module_label}):")
         parts.append("Read these connections carefully to determine the execution order.")
         parts.append("The origin_connection name tells you WHICH output of a tool to use.")
